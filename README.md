@@ -28,8 +28,6 @@ markdown_viewer/
 ├── requirements.txt  # Dependências pip
 ├── build.bat         # Script de compilação para .exe (Windows)
 ├── build.sh          # Script de compilação para .exe (Linux/Mac)
-├── REQUIREMENTS.md   # PRD com requisitos funcionais
-├── KANBAN.md         # Backlog e tarefas concluídas
 └── README.md
 ```
 
