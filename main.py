@@ -10,6 +10,9 @@ APP_TITLE = "Markdown Viewer"
 FILETYPES = [("Markdown", "*.md *.markdown"), ("Texto", "*.txt"), ("Todos", "*.*")]
 CONFIG_PATH = os.path.join(os.path.expanduser("~"), ".markdown_viewer_config.json")
 
+# Index of "Salvar" in the Arquivo menu (0-based, separators count)
+_SAVE_MENU_INDEX = 3
+
 CSS_LIGHT = """
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -195,12 +198,16 @@ class MarkdownViewer(tk.Tk):
     def __init__(self, filepath=None):
         super().__init__()
         self.current_file = None
+        self._modified = False
+        self._edit_mode = False
+        self._preview_timer = None
         config = _load_config()
         self.dark_mode = config.get("dark_mode", False)
         self._setup_window()
         self._setup_menu()
         self._setup_frame()
         self._bind_keys()
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
         if filepath:
             self.load_file(filepath)
 
@@ -215,15 +222,30 @@ class MarkdownViewer(tk.Tk):
 
     def _setup_menu(self):
         menubar = tk.Menu(self)
-        file_menu = tk.Menu(menubar, tearoff=0)
-        file_menu.add_command(label="Abrir...  Ctrl+O", command=self.open_file_dialog)
-        file_menu.add_command(label="Recarregar  F5", command=self.reload)
-        file_menu.add_separator()
-        file_menu.add_command(label="Sair  Esc", command=self.quit)
-        menubar.add_cascade(label="Arquivo", menu=file_menu)
 
+        # Arquivo
+        self._file_menu = tk.Menu(menubar, tearoff=0)
+        self._file_menu.add_command(label="Novo  Ctrl+N", command=self.new_file)
+        self._file_menu.add_command(label="Abrir...  Ctrl+O", command=self.open_file_dialog)
+        self._file_menu.add_separator()
+        # index 3 — Salvar (starts disabled)
+        self._file_menu.add_command(label="Salvar  Ctrl+S", command=self.save_file, state=tk.DISABLED)
+        self._file_menu.add_command(label="Salvar Como...  Ctrl+Shift+S", command=self.save_file_as)
+        self._file_menu.add_separator()
+        self._file_menu.add_command(label="Recarregar  F5", command=self.reload)
+        self._file_menu.add_separator()
+        self._file_menu.add_command(label="Sair  Esc", command=self._on_close)
+        menubar.add_cascade(label="Arquivo", menu=self._file_menu)
+
+        # Visualizar
         self._dark_mode_var = tk.BooleanVar(value=self.dark_mode)
+        self._edit_mode_var = tk.BooleanVar(value=False)
         view_menu = tk.Menu(menubar, tearoff=0)
+        view_menu.add_checkbutton(
+            label="Modo Edição  Ctrl+E",
+            variable=self._edit_mode_var,
+            command=self.toggle_edit_mode,
+        )
         view_menu.add_checkbutton(
             label="Tema Escuro  Ctrl+D",
             variable=self._dark_mode_var,
@@ -234,16 +256,126 @@ class MarkdownViewer(tk.Tk):
         self.config(menu=menubar)
 
     def _setup_frame(self):
-        self.html_frame = HtmlFrame(self, messages_enabled=False)
-        self.html_frame.pack(fill="both", expand=True)
+        # PanedWindow is always the root container
+        self.paned = tk.PanedWindow(self, orient=tk.HORIZONTAL, sashwidth=5, sashrelief=tk.RAISED)
+        self.paned.pack(fill="both", expand=True)
+
+        # Editor frame (left) — built now, added to paned only when edit mode is on
+        self.editor_frame = tk.Frame(self.paned)
+        self._setup_editor()
+
+        # Preview frame (right) — always visible
+        self.html_frame = HtmlFrame(self.paned, messages_enabled=False)
+        self.paned.add(self.html_frame, stretch="always")
+
+    def _setup_editor(self):
+        scrollbar = tk.Scrollbar(self.editor_frame)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        self.editor = tk.Text(
+            self.editor_frame,
+            yscrollcommand=scrollbar.set,
+            wrap=tk.WORD,
+            undo=True,
+            font=("Consolas", 11),
+            relief=tk.FLAT,
+            borderwidth=0,
+            padx=12,
+            pady=12,
+        )
+        self.editor.pack(fill="both", expand=True)
+        scrollbar.config(command=self.editor.yview)
+
+        self._apply_editor_colors()
+        self.editor.bind("<KeyRelease>", self._on_editor_key)
+
+    def _apply_editor_colors(self):
+        if self.dark_mode:
+            self.editor_frame.configure(bg="#0d1117")
+            self.editor.configure(
+                bg="#0d1117",
+                fg="#e6edf3",
+                insertbackground="#58a6ff",
+                selectbackground="#1f4d7a",
+                selectforeground="#e6edf3",
+            )
+        else:
+            self.editor_frame.configure(bg="#f6f8fa")
+            self.editor.configure(
+                bg="#f6f8fa",
+                fg="#24292f",
+                insertbackground="#0969da",
+                selectbackground="#b6d4fb",
+                selectforeground="#24292f",
+            )
 
     def _bind_keys(self):
+        self.bind("<Control-n>", lambda e: self.new_file())
         self.bind("<Control-o>", lambda e: self.open_file_dialog())
+        self.bind("<Control-s>", lambda e: self.save_file())
+        self.bind("<Control-S>", lambda e: self.save_file_as())
         self.bind("<F5>", lambda e: self.reload())
-        self.bind("<Escape>", lambda e: self.quit())
+        self.bind("<Escape>", lambda e: self._on_close())
         self.bind("<Control-d>", lambda e: self.toggle_dark_mode())
+        self.bind("<Control-e>", lambda e: self.toggle_edit_mode())
+        self.bind("<F2>", lambda e: self.toggle_edit_mode())
+
+    # ------------------------------------------------------------------ #
+    # Editor events                                                        #
+    # ------------------------------------------------------------------ #
+
+    def _on_editor_key(self, event=None):
+        if not self._modified:
+            self._modified = True
+            self._update_title()
+            self._file_menu.entryconfig(_SAVE_MENU_INDEX, state=tk.NORMAL)
+        if self._preview_timer:
+            self.after_cancel(self._preview_timer)
+        self._preview_timer = self.after(300, self._update_preview)
+
+    def _update_preview(self):
+        content = self.editor.get("1.0", tk.END)
+        base_path = os.path.dirname(self.current_file) if self.current_file else ""
+        self._render(content, base_path=base_path)
+
+    # ------------------------------------------------------------------ #
+    # Title management                                                     #
+    # ------------------------------------------------------------------ #
+
+    def _update_title(self):
+        if self.current_file:
+            filename = os.path.basename(self.current_file)
+            prefix = "* " if self._modified else ""
+            self.title(f"{prefix}{filename} — {APP_TITLE}")
+        else:
+            self.title(APP_TITLE)
+
+    # ------------------------------------------------------------------ #
+    # Unsaved-changes guard                                                #
+    # ------------------------------------------------------------------ #
+
+    def _confirm_discard(self):
+        """Returns True if it's safe to proceed (no unsaved changes, or user handled them)."""
+        if not self._modified:
+            return True
+        answer = messagebox.askyesnocancel(
+            APP_TITLE,
+            "Há alterações não salvas. Deseja salvar antes de continuar?",
+        )
+        if answer is None:   # Cancelar
+            return False
+        if answer:           # Sim — salvar primeiro
+            if not self.save_file():
+                return False
+        return True          # Não — descartar e prosseguir
+
+    # ------------------------------------------------------------------ #
+    # File operations                                                      #
+    # ------------------------------------------------------------------ #
 
     def open_file_dialog(self):
+        if not self._confirm_discard():
+            return
         initial_dir = os.path.dirname(self.current_file) if self.current_file else os.path.expanduser("~")
         path = filedialog.askopenfilename(
             title="Abrir arquivo Markdown",
@@ -266,19 +398,94 @@ class MarkdownViewer(tk.Tk):
             return
 
         self.current_file = path
-        filename = os.path.basename(path)
-        self.title(f"{filename} — {APP_TITLE}")
+        self._modified = False
+        self._file_menu.entryconfig(_SAVE_MENU_INDEX, state=tk.DISABLED)
+
+        # Populate editor without triggering _on_editor_key
+        self.editor.edit_reset()
+        self.editor.delete("1.0", tk.END)
+        self.editor.insert("1.0", content)
+        self.editor.edit_modified(False)
+
+        self._update_title()
         self._render(content, base_path=os.path.dirname(path))
+
+    def new_file(self):
+        if not self._confirm_discard():
+            return
+        self.current_file = None
+        self._modified = False
+        self.editor.edit_reset()
+        self.editor.delete("1.0", tk.END)
+        self.editor.edit_modified(False)
+        self._file_menu.entryconfig(_SAVE_MENU_INDEX, state=tk.DISABLED)
+        self._update_title()
+        self._render("", base_path="")
+
+    def save_file(self):
+        if not self.current_file:
+            return self.save_file_as()
+        content = self.editor.get("1.0", tk.END).rstrip("\n") + "\n"
+        try:
+            with open(self.current_file, "w", encoding="utf-8") as f:
+                f.write(content)
+        except Exception as e:
+            messagebox.showerror(APP_TITLE, f"Erro ao salvar:\n{e}")
+            return False
+        self._modified = False
+        self._file_menu.entryconfig(_SAVE_MENU_INDEX, state=tk.DISABLED)
+        self._update_title()
+        return True
+
+    def save_file_as(self):
+        initial_dir = os.path.dirname(self.current_file) if self.current_file else os.path.expanduser("~")
+        initial_file = os.path.basename(self.current_file) if self.current_file else "novo.md"
+        path = filedialog.asksaveasfilename(
+            title="Salvar Como",
+            initialdir=initial_dir,
+            initialfile=initial_file,
+            defaultextension=".md",
+            filetypes=FILETYPES,
+        )
+        if not path:
+            return False
+        self.current_file = path
+        return self.save_file()
+
+    # ------------------------------------------------------------------ #
+    # Mode toggles                                                         #
+    # ------------------------------------------------------------------ #
+
+    def toggle_edit_mode(self):
+        self._edit_mode = not self._edit_mode
+        self._edit_mode_var.set(self._edit_mode)
+        if self._edit_mode:
+            # Remove html_frame, re-add both: editor (left) then html (right)
+            self.paned.forget(self.html_frame)
+            self.paned.add(self.editor_frame, stretch="always", width=450)
+            self.paned.add(self.html_frame, stretch="always")
+            self._apply_editor_colors()
+            self.editor.focus_set()
+        else:
+            # Remove editor; html_frame stays as the only pane
+            self.paned.forget(self.editor_frame)
 
     def toggle_dark_mode(self):
         self.dark_mode = not self.dark_mode
         self._dark_mode_var.set(self.dark_mode)
         _save_config({"dark_mode": self.dark_mode})
         self._apply_window_bg()
+        self._apply_editor_colors()
         if self.current_file:
-            self.reload()
+            self._render(self.editor.get("1.0", tk.END), base_path=os.path.dirname(self.current_file))
+        elif self._edit_mode:
+            self._update_preview()
         else:
             self.show_welcome()
+
+    # ------------------------------------------------------------------ #
+    # Rendering                                                            #
+    # ------------------------------------------------------------------ #
 
     def _render(self, markdown_text, base_path=""):
         css = CSS_DARK if self.dark_mode else CSS_LIGHT
@@ -288,8 +495,16 @@ class MarkdownViewer(tk.Tk):
         self.html_frame.load_html(html, base_url=base_url)
 
     def reload(self):
-        if self.current_file:
-            self.load_file(self.current_file)
+        if not self.current_file:
+            return
+        if self._modified:
+            answer = messagebox.askyesno(
+                APP_TITLE,
+                "Há alterações não salvas. Recarregar vai descartar essas alterações. Continuar?",
+            )
+            if not answer:
+                return
+        self.load_file(self.current_file)
 
     def show_welcome(self):
         welcome_md = """# Markdown Viewer
@@ -308,6 +523,15 @@ Para associar ao menu "Abrir com" do Windows, clique com o botão direito em qua
 arquivo `.md`, escolha **Abrir com > Escolher outro aplicativo** e selecione este executável.
 """
         self._render(welcome_md)
+
+    # ------------------------------------------------------------------ #
+    # Window close                                                         #
+    # ------------------------------------------------------------------ #
+
+    def _on_close(self):
+        if not self._confirm_discard():
+            return
+        self.quit()
 
 
 def main():
