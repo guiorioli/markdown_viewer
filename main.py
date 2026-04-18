@@ -320,6 +320,52 @@ class MarkdownViewer(tk.Tk):
         self.bind("<Control-e>", lambda e: self.toggle_edit_mode())
         self.bind("<F2>", lambda e: self.toggle_edit_mode())
 
+        # Navegacao por teclado no preview HTML
+        self.bind_all("<Up>", self._scroll_up)
+        self.bind_all("<Down>", self._scroll_down)
+        self.bind_all("<Prior>", self._scroll_page_up)    # Page Up
+        self.bind_all("<Next>", self._scroll_page_down)     # Page Down
+        self.bind_all("<Home>", self._scroll_home)
+        self.bind_all("<End>", self._scroll_end)
+        self.bind_all("<space>", self._scroll_page_down)
+        self.bind_all("<Shift-space>", self._scroll_page_up)
+
+    def _scroll_up(self, event=None):
+        """Scroll uma linha para cima no HTML."""
+        if not self._edit_mode or not self.editor_frame.winfo_ismapped():
+            self.html_frame.yview_scroll(-3, "units")
+        return "break"
+
+    def _scroll_down(self, event=None):
+        """Scroll uma linha para baixo no HTML."""
+        if not self._edit_mode or not self.editor_frame.winfo_ismapped():
+            self.html_frame.yview_scroll(3, "units")
+        return "break"
+
+    def _scroll_page_up(self, event=None):
+        """Scroll uma pagina para cima."""
+        if not self._edit_mode or not self.editor_frame.winfo_ismapped():
+            self.html_frame.yview_scroll(-1, "pages")
+        return "break"
+
+    def _scroll_page_down(self, event=None):
+        """Scroll uma pagina para baixo."""
+        if not self._edit_mode or not self.editor_frame.winfo_ismapped():
+            self.html_frame.yview_scroll(1, "pages")
+        return "break"
+
+    def _scroll_home(self, event=None):
+        """Ir para o inicio do documento."""
+        if not self._edit_mode or not self.editor_frame.winfo_ismapped():
+            self.html_frame.yview_moveto(0.0)
+        return "break"
+
+    def _scroll_end(self, event=None):
+        """Ir para o final do documento."""
+        if not self._edit_mode or not self.editor_frame.winfo_ismapped():
+            self.html_frame.yview_moveto(1.0)
+        return "break"
+
     # ------------------------------------------------------------------ #
     # Editor events                                                        #
     # ------------------------------------------------------------------ #
