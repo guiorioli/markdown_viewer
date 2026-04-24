@@ -1,10 +1,12 @@
 # Markdown Viewer
 
-Aplicação desktop leve para Windows que visualiza arquivos Markdown com suporte a tema claro/escuro, integração ao "Abrir com" do Explorer e compilação para `.exe` standalone.
+Aplicação desktop leve para Windows que visualiza arquivos Markdown e JSON com suporte a tema claro/escuro, integração ao "Abrir com" do Explorer e compilação para `.exe` standalone.
 
 ## Funcionalidades
 
 - Renderização completa de Markdown (cabeçalhos, tabelas, código, listas, blockquotes, imagens, links)
+- Leitura e prettify de arquivos JSON com indentação e syntax highlight
+- Busca no conteúdo com destaque de ocorrências (Ctrl+F)
 - Tema claro e escuro com preferência persistida entre sessões
 - Abertura via argumento de linha de comando ("Abrir com" do Windows)
 - Diálogo de seleção de arquivo
@@ -18,6 +20,7 @@ Aplicação desktop leve para Windows que visualiza arquivos Markdown com suport
 | Linguagem     | Python 3.14                         |
 | UI            | tkinter (built-in) + tkinterweb     |
 | Parser MD     | markdown2                           |
+| Parser JSON   | json (built-in)                     |
 | Distribuição  | PyInstaller (`.exe` único)          |
 
 ## Estrutura
@@ -45,8 +48,11 @@ A preferência de tema é salva em:
 # Instalar dependências
 python -m pip install -r requirements.txt
 
-# Abrir um arquivo específico
+# Abrir um arquivo Markdown
 python main.py caminho/para/arquivo.md
+
+# Abrir um arquivo JSON (exibido com prettify)
+python main.py caminho/para/arquivo.json
 
 # Sem argumento — exibe tela de boas-vindas com diálogo de seleção
 python main.py
@@ -76,4 +82,9 @@ A partir daí, clicar duas vezes em qualquer `.md` abrirá o Markdown Viewer aut
 | Ctrl+O   | Abrir arquivo                 |
 | F5       | Recarregar arquivo atual      |
 | Ctrl+D   | Alternar tema claro/escuro    |
-| Escape   | Fechar aplicação              |
+| Ctrl+F   | Abrir busca no conteúdo       |
+| Escape   | Fechar busca / Fechar aplicação |
+
+## Busca (Ctrl+F)
+
+A busca abre uma barra na parte inferior da janela. Digite o termo desejado e pressione **Enter** para navegar entre as ocorrências. As correspondências são destacadas no texto. Pressione **Escape** para fechar a barra de busca.
