@@ -194,6 +194,110 @@ def _save_config(data):
         pass
 
 
+class FindWindow(tk.Toplevel):
+    def __init__(self, master, html_frame, dark_mode=False):
+        super().__init__(master)
+        self.html_frame = html_frame
+        self._current_match = 1
+        self._total_matches = 0
+        self._query = ""
+        self._last_query = ""
+
+        self.title("Buscar")
+        self.transient(master)
+        self.resizable(False, False)
+
+        frame = tk.Frame(self)
+        frame.pack(padx=8, pady=8)
+
+        self.entry = tk.Entry(frame, width=30)
+        self.entry.grid(row=0, column=0, columnspan=3, sticky="ew", pady=(0, 8))
+        self.entry.focus_set()
+
+        tk.Button(frame, text="Anterior", command=self._prev).grid(row=1, column=0, padx=2)
+        tk.Button(frame, text="Próximo", command=self._next).grid(row=1, column=1, padx=2)
+        tk.Button(frame, text="Fechar", command=self._close).grid(row=1, column=2, padx=2)
+
+        self.counter = tk.Label(frame, text="")
+        self.counter.grid(row=2, column=0, columnspan=3, pady=(4, 0))
+
+        self.entry.bind("<KeyRelease>", self._on_key_release)
+        self.entry.bind("<Return>", lambda e: self._next())
+        self.entry.bind("<Shift-Return>", lambda e: self._prev())
+        self.bind("<Escape>", lambda e: self._close())
+
+        self._apply_theme(dark_mode)
+
+    def _apply_theme(self, dark_mode):
+        if dark_mode:
+            bg = "#0d1117"
+            fg = "#e6edf3"
+            entry_bg = "#161b22"
+        else:
+            bg = "#f6f8fa"
+            fg = "#24292f"
+            entry_bg = "#ffffff"
+        self.configure(bg=bg)
+        for child in self.winfo_children():
+            if isinstance(child, tk.Frame):
+                child.configure(bg=bg)
+                for c in child.winfo_children():
+                    if isinstance(c, (tk.Label, tk.Button)):
+                        c.configure(bg=bg, fg=fg)
+                    elif isinstance(c, tk.Entry):
+                        c.configure(bg=entry_bg, fg=fg, insertbackground=fg)
+
+    def _on_key_release(self, event=None):
+        self._query = self.entry.get()
+        if not self._query:
+            self.html_frame.find_text("")
+            self._total_matches = 0
+            self._current_match = 1
+            self._last_query = ""
+            self._update_counter()
+            return
+        if self._query == self._last_query:
+            return
+        self._last_query = self._query
+        self._current_match = 1
+        self._total_matches = self.html_frame.find_text(
+            self._query, select=1, ignore_case=True, highlight_all=True
+        )
+        self._update_counter()
+
+    def _next(self):
+        if not self._query or self._total_matches == 0:
+            return
+        self._current_match += 1
+        if self._current_match > self._total_matches:
+            self._current_match = 1
+        self.html_frame.find_text(
+            self._query, select=self._current_match, ignore_case=True, highlight_all=True
+        )
+        self._update_counter()
+
+    def _prev(self):
+        if not self._query or self._total_matches == 0:
+            return
+        self._current_match -= 1
+        if self._current_match < 1:
+            self._current_match = self._total_matches
+        self.html_frame.find_text(
+            self._query, select=self._current_match, ignore_case=True, highlight_all=True
+        )
+        self._update_counter()
+
+    def _update_counter(self):
+        if self._total_matches == 0:
+            self.counter.config(text="Nenhuma ocorrência")
+        else:
+            self.counter.config(text=f"{self._current_match} de {self._total_matches}")
+
+    def _close(self):
+        self.html_frame.find_text("")
+        self.destroy()
+
+
 class MarkdownViewer(tk.Tk):
     def __init__(self, filepath=None):
         super().__init__()
@@ -201,6 +305,7 @@ class MarkdownViewer(tk.Tk):
         self._modified = False
         self._edit_mode = False
         self._preview_timer = None
+        self._find_window = None
         config = _load_config()
         self.dark_mode = config.get("dark_mode", False)
         self._setup_window()
@@ -319,6 +424,9 @@ class MarkdownViewer(tk.Tk):
         self.bind("<Control-d>", lambda e: self.toggle_dark_mode())
         self.bind("<Control-e>", lambda e: self.toggle_edit_mode())
         self.bind("<F2>", lambda e: self.toggle_edit_mode())
+        self.bind("<Control-f>", lambda e: self._open_find())
+        self.bind("<F3>", lambda e: self._find_next())
+        self.bind("<Shift-F3>", lambda e: self._find_previous())
 
         # Navegacao por teclado no preview HTML
         self.bind_all("<Up>", self._scroll_up)
@@ -522,6 +630,8 @@ class MarkdownViewer(tk.Tk):
         _save_config({"dark_mode": self.dark_mode})
         self._apply_window_bg()
         self._apply_editor_colors()
+        if self._find_window is not None and self._find_window.winfo_exists():
+            self._find_window._apply_theme(self.dark_mode)
         if self.current_file:
             self._render(self.editor.get("1.0", tk.END), base_path=os.path.dirname(self.current_file))
         elif self._edit_mode:
@@ -578,6 +688,36 @@ arquivo `.md`, escolha **Abrir com > Escolher outro aplicativo** e selecione est
         if not self._confirm_discard():
             return
         self.quit()
+
+    # ------------------------------------------------------------------ #
+    # Find / Search                                                        #
+    # ------------------------------------------------------------------ #
+
+    def _open_find(self):
+        if self._find_window is not None and self._find_window.winfo_exists():
+            self._find_window.lift()
+            self._find_window.entry.focus_set()
+            self._find_window.entry.selection_range(0, tk.END)
+            return
+        self._find_window = FindWindow(self, self.html_frame, dark_mode=self.dark_mode)
+        self._find_window.protocol("WM_DELETE_WINDOW", self._on_find_close)
+
+    def _on_find_close(self):
+        if self._find_window is not None and self._find_window.winfo_exists():
+            self._find_window._close()
+        self._find_window = None
+
+    def _find_next(self):
+        if self._find_window is not None and self._find_window.winfo_exists():
+            self._find_window._next()
+        else:
+            self._open_find()
+
+    def _find_previous(self):
+        if self._find_window is not None and self._find_window.winfo_exists():
+            self._find_window._prev()
+        else:
+            self._open_find()
 
 
 def main():
