@@ -1,6 +1,8 @@
 import sys
 import os
 import json
+import webbrowser
+from urllib.parse import urlparse, urldefrag
 import tkinter as tk
 from tkinter import filedialog, messagebox
 import markdown2
@@ -385,8 +387,58 @@ class MarkdownViewer(tk.Tk):
         self._setup_editor()
 
         # Preview frame (right) — always visible
-        self.html_frame = HtmlFrame(self.paned, messages_enabled=False)
+        self.html_frame = HtmlFrame(self.paned, messages_enabled=False, on_link_click=self._on_link_click)
         self.paned.add(self.html_frame, stretch="always")
+
+    def _on_link_click(self, url):
+        parsed = urlparse(url)
+
+        # External links -> system browser
+        if parsed.scheme in ("http", "https"):
+            webbrowser.open(url)
+            return
+
+        # file:// or plain local paths
+        clean_url, fragment = urldefrag(url)
+        parsed_clean = urlparse(clean_url)
+
+        if parsed_clean.scheme == "file":
+            path = parsed_clean.path
+            # Windows file URIs: /C:/path -> C:/path
+            if path.startswith("/") and len(path) > 2 and path[2] == ":":
+                path = path[1:]
+            path = os.path.normpath(path)
+        else:
+            path = clean_url
+            if path and not os.path.isabs(path) and self.current_file:
+                base = os.path.dirname(self.current_file)
+                path = os.path.normpath(os.path.join(base, path))
+
+        current = os.path.normpath(self.current_file) if self.current_file else None
+        current_dir = os.path.dirname(current) if current else None
+
+        # Anchor in current file (same file, empty path, or same directory)
+        is_same_file = not path or path == current
+        is_same_dir = bool(current_dir and path == current_dir)
+        if fragment and (is_same_file or is_same_dir):
+            base_path = os.path.dirname(self.current_file) if self.current_file else ""
+            content = self.editor.get("1.0", tk.END)
+            self._render(content, base_path=base_path, fragment=fragment)
+            return
+
+        # Another markdown file
+        if path and path.lower().endswith((".md", ".markdown")):
+            if os.path.isfile(path):
+                self.load_file(path, fragment=fragment)
+            else:
+                messagebox.showerror(APP_TITLE, f"Arquivo não encontrado:\n{path}")
+            return
+
+        # Other local files -> open with system default
+        if path and os.path.isfile(path):
+            webbrowser.open(f"file:///{os.path.abspath(path).replace(os.sep, '/')}")
+        else:
+            webbrowser.open(url)
 
     def _setup_editor_toolbar(self):
         self.editor_toolbar = tk.Frame(self.editor_frame, height=30)
@@ -563,7 +615,7 @@ class MarkdownViewer(tk.Tk):
         if path:
             self.load_file(path)
 
-    def load_file(self, path):
+    def load_file(self, path, fragment=None):
         path = os.path.abspath(path)
         if not os.path.isfile(path):
             messagebox.showerror(APP_TITLE, f"Arquivo não encontrado:\n{path}")
@@ -587,7 +639,7 @@ class MarkdownViewer(tk.Tk):
 
         self._update_title()
         self._update_format_controls()
-        self._render(content, base_path=os.path.dirname(path))
+        self._render(content, base_path=os.path.dirname(path), fragment=fragment)
 
     def new_file(self):
         if not self._confirm_discard():
@@ -698,7 +750,7 @@ class MarkdownViewer(tk.Tk):
     def _escape_html(self, text):
         return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
-    def _render(self, text, base_path=""):
+    def _render(self, text, base_path="", fragment=None):
         css = CSS_DARK if self.dark_mode else CSS_LIGHT
         if self.current_file and self.current_file.lower().endswith(".json"):
             try:
@@ -712,7 +764,7 @@ class MarkdownViewer(tk.Tk):
             body = markdown2.markdown(text, extras=MARKDOWN_EXTRAS)
         base_url = f"file:///{base_path.replace(os.sep, '/')}/" if base_path else ""
         html = f"<!DOCTYPE html><html><head><meta charset='utf-8'>{css}</head><body>{body}</body></html>"
-        self.html_frame.load_html(html, base_url=base_url)
+        self.html_frame.load_html(html, base_url=base_url, fragment=fragment)
 
     def reload(self):
         if not self.current_file:
