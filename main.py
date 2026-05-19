@@ -313,8 +313,8 @@ class MarkdownViewer(tk.Tk):
         self._edit_mode = False
         self._preview_timer = None
         self._find_window = None
-        config = _load_config()
-        self.dark_mode = config.get("dark_mode", False)
+        self._config = _load_config()
+        self.dark_mode = self._config.get("dark_mode", False)
         self._setup_window()
         self._setup_menu()
         self._setup_frame()
@@ -325,9 +325,28 @@ class MarkdownViewer(tk.Tk):
 
     def _setup_window(self):
         self.title(APP_TITLE)
-        self.geometry("1024x768")
-        self.minsize(600, 400)
+        self.minsize(800, 450)
+        if self._config.get("maximized"):
+            self.state("zoomed")
+        else:
+            saved_geom = self._config.get("geometry")
+            if saved_geom:
+                self.geometry(saved_geom)
+            else:
+                self._apply_default_geometry()
         self._apply_window_bg()
+
+    def _apply_default_geometry(self):
+        screen_w = self.winfo_screenwidth()
+        screen_h = self.winfo_screenheight()
+        width = int(screen_w * 0.80)
+        height = int(width * 9 / 16)
+        if height > int(screen_h * 0.85):
+            height = int(screen_h * 0.85)
+            width = int(height * 16 / 9)
+        x = (screen_w - width) // 2
+        y = (screen_h - height) // 2
+        self.geometry(f"{width}x{height}+{x}+{y}")
 
     def _apply_window_bg(self):
         self.configure(bg="#0d1117" if self.dark_mode else "#ffffff")
@@ -699,9 +718,10 @@ class MarkdownViewer(tk.Tk):
         self._edit_mode = not self._edit_mode
         self._edit_mode_var.set(self._edit_mode)
         if self._edit_mode:
-            # Remove html_frame, re-add both: editor (left) then html (right)
+            # Remove html_frame, re-add both: editor (left, 40%) then html (right, 60%)
             self.paned.forget(self.html_frame)
-            self.paned.add(self.editor_frame, stretch="always", width=450)
+            editor_width = max(int(self.winfo_width() * 0.40), 300)
+            self.paned.add(self.editor_frame, stretch="always", width=editor_width)
             self.paned.add(self.html_frame, stretch="always")
             self._apply_editor_colors()
             self.editor.focus_set()
@@ -712,7 +732,8 @@ class MarkdownViewer(tk.Tk):
     def toggle_dark_mode(self):
         self.dark_mode = not self.dark_mode
         self._dark_mode_var.set(self.dark_mode)
-        _save_config({"dark_mode": self.dark_mode})
+        self._config["dark_mode"] = self.dark_mode
+        _save_config(self._config)
         self._apply_window_bg()
         self._apply_editor_colors()
         if self._find_window is not None and self._find_window.winfo_exists():
@@ -803,6 +824,11 @@ arquivo `.md`, escolha **Abrir com > Escolher outro aplicativo** e selecione est
     def _on_close(self):
         if not self._confirm_discard():
             return
+        self._config["maximized"] = (self.state() == "zoomed")
+        if not self._config["maximized"]:
+            self._config["geometry"] = self.geometry()
+        self._config["dark_mode"] = self.dark_mode
+        _save_config(self._config)
         self.quit()
 
     # ------------------------------------------------------------------ #
