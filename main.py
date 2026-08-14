@@ -1,5 +1,6 @@
 import sys
 import os
+import re
 import json
 import webbrowser
 from urllib.parse import urlparse, urldefrag
@@ -330,11 +331,41 @@ class MarkdownViewer(tk.Tk):
             self.state("zoomed")
         else:
             saved_geom = self._config.get("geometry")
-            if saved_geom:
-                self.geometry(saved_geom)
-            else:
+            if not (saved_geom and self._restore_saved_geometry(saved_geom)):
                 self._apply_default_geometry()
         self._apply_window_bg()
+
+    def _virtual_screen_bounds(self):
+        # No Windows, winfo_screenwidth cobre só o monitor primário; o virtual
+        # screen reflete apenas os monitores conectados no momento.
+        if sys.platform == "win32":
+            import ctypes
+            user32 = ctypes.windll.user32
+            return (
+                user32.GetSystemMetrics(76),  # SM_XVIRTUALSCREEN
+                user32.GetSystemMetrics(77),  # SM_YVIRTUALSCREEN
+                user32.GetSystemMetrics(78),  # SM_CXVIRTUALSCREEN
+                user32.GetSystemMetrics(79),  # SM_CYVIRTUALSCREEN
+            )
+        return (0, 0, self.winfo_screenwidth(), self.winfo_screenheight())
+
+    def _restore_saved_geometry(self, saved_geom):
+        m = re.fullmatch(r"(\d+)x(\d+)\+(-?\d+)\+(-?\d+)", saved_geom)
+        if not m:
+            return False
+        width, height, x, y = map(int, m.groups())
+        if width < 200 or height < 150:
+            return False
+        vx, vy, vw, vh = self._virtual_screen_bounds()
+        # Pelo menos 100px de largura da janela e a barra de título precisam
+        # estar em área visível, senão a geometria salva é de outro layout de
+        # monitores e a janela abriria fora da tela.
+        if x + width - 100 < vx or x + 100 > vx + vw:
+            return False
+        if y < vy - 10 or y + 30 > vy + vh:
+            return False
+        self.geometry(saved_geom)
+        return True
 
     def _apply_default_geometry(self):
         screen_w = self.winfo_screenwidth()
@@ -825,7 +856,9 @@ arquivo `.md`, escolha **Abrir com > Escolher outro aplicativo** e selecione est
         if not self._confirm_discard():
             return
         self._config["maximized"] = (self.state() == "zoomed")
-        if not self._config["maximized"]:
+        if self.state() == "normal":
+            # Janela minimizada reporta coordenadas inválidas (ex.: -32000);
+            # nesse caso mantém a última geometria válida salva.
             self._config["geometry"] = self.geometry()
         self._config["dark_mode"] = self.dark_mode
         _save_config(self._config)
